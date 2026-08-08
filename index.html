@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GLS × RL — Invoice Generator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  :root {
+    --navy:   #1F3864;
+    --blue:   #2E5090;
+    --light:  #EAF0FB;
+    --amber:  #B8860B;
+    --amber-bg: #FFFBE6;
+    --ink:    #1A1A2E;
+    --muted:  #666680;
+    --border: #CBD5E8;
+    --white:  #FFFFFF;
+    --bg:     #F5F7FC;
+    --red:    #C0392B;
+    --green:  #1A6B3C;
+    --green-bg: #E8F5EE;
+    --radius: 8px;
+    --shadow: 0 2px 12px rgba(31,56,100,0.10);
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; min-height: 100vh; }
+
+  /* ── Layout ── */
+  .app { display: grid; grid-template-columns: 340px 1fr; min-height: 100vh; }
+  .sidebar { background: var(--navy); color: #fff; padding: 28px 24px; display: flex; flex-direction: column; gap: 24px; }
+  .main { padding: 32px 36px; overflow-y: auto; }
+
+  /* ── Sidebar ── */
+  .sidebar-logo { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+  .sidebar-logo span { color: #AABDD8; font-weight: 400; font-size: 13px; display: block; margin-top: 2px; }
+  .sidebar-section { display: flex; flex-direction: column; gap: 12px; }
+  .sidebar-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: #7A9CC4; font-weight: 600; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: #AABDD8; }
+  .field input, .field select {
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px; color: #fff; padding: 8px 10px; font-size: 13px; width: 100%;
+    outline: none; transition: border .2s;
+  }
+  .field input:focus, .field select:focus { border-color: rgba(255,255,255,0.5); background: rgba(255,255,255,0.12); }
+  .field input::placeholder { color: #6A8CAE; }
+  .field select option { background: var(--navy); }
+  .divider-line { border: none; border-top: 1px solid rgba(255,255,255,0.1); }
+  .big-input-wrap { background: rgba(255,255,255,0.06); border-radius: 10px; padding: 16px; border: 1px solid rgba(255,255,255,0.1); }
+  .big-input-label { font-size: 11px; color: #7A9CC4; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .big-input { font-size: 28px; font-weight: 700; color: #fff; background: none; border: none; outline: none; width: 100%; }
+  .big-input::placeholder { color: #3A5A80; }
+  .calc-preview { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+  .calc-row { display: flex; justify-content: space-between; font-size: 12px; color: #AABDD8; }
+  .calc-row.total { color: #fff; font-weight: 600; font-size: 13px; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 6px; margin-top: 2px; }
+  .btn { padding: 10px 16px; border-radius: var(--radius); border: none; cursor: pointer; font-size: 13px; font-weight: 600; transition: all .2s; width: 100%; }
+  .btn-primary { background: #fff; color: var(--navy); }
+  .btn-primary:hover { background: var(--light); }
+  .btn-secondary { background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2); }
+  .btn-secondary:hover { background: rgba(255,255,255,0.18); }
+  .btn-danger { background: rgba(192,57,43,0.2); color: #F1948A; border: 1px solid rgba(192,57,43,0.3); }
+  .btn-danger:hover { background: rgba(192,57,43,0.35); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── Supabase config ── */
+  .config-toggle { font-size: 11px; color: #7A9CC4; cursor: pointer; text-decoration: underline; text-align: center; }
+  .config-panel { display: none; flex-direction: column; gap: 8px; }
+  .config-panel.open { display: flex; }
+  .config-note { font-size: 11px; color: #7A9CC4; line-height: 1.5; }
+
+  /* ── Main area tabs ── */
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; background: var(--white); border-radius: var(--radius); padding: 4px; border: 1px solid var(--border); width: fit-content; }
+  .tab { padding: 8px 20px; border-radius: 6px; border: none; background: none; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--muted); transition: all .2s; }
+  .tab.active { background: var(--navy); color: #fff; }
+
+  /* ── Invoice Preview ── */
+  .invoice-shell { background: var(--white); border-radius: 12px; box-shadow: var(--shadow); padding: 40px 44px; max-width: 860px; }
+  .inv-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 28px; }
+  .inv-from-name { font-size: 22px; font-weight: 700; color: var(--navy); }
+  .inv-from-role { font-size: 12px; color: var(--muted); font-style: italic; margin-top: 2px; }
+  .inv-from-detail { font-size: 12px; color: var(--ink); margin-top: 10px; line-height: 1.8; }
+  .inv-badge { background: var(--navy); color: #fff; border-radius: 8px; padding: 14px 20px; text-align: right; min-width: 220px; }
+  .inv-badge-title { font-size: 18px; font-weight: 700; }
+  .inv-badge-sub { font-size: 11px; color: #AABDD8; font-style: italic; margin-top: 2px; }
+  .inv-meta { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 12px; }
+  .inv-meta-row { display: flex; gap: 6px; }
+  .inv-meta-label { color: #AABDD8; min-width: 80px; }
+  .inv-divider { border: none; border-top: 3px solid var(--navy); margin: 20px 0; }
+  .inv-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  .inv-party-box { background: var(--light); border-radius: var(--radius); padding: 14px 16px; }
+  .inv-party-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--blue); font-weight: 700; margin-bottom: 8px; }
+  .inv-party-name { font-size: 14px; font-weight: 600; }
+  .inv-party-detail { font-size: 12px; color: var(--muted); line-height: 1.7; margin-top: 4px; }
+  .inv-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--navy); font-weight: 700; margin-bottom: 10px; }
+  table.inv-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
+  table.inv-table th { background: var(--navy); color: #fff; padding: 9px 12px; text-align: left; font-size: 12px; font-weight: 600; }
+  table.inv-table th:last-child, table.inv-table td:last-child { text-align: right; }
+  table.inv-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+  table.inv-table tr:nth-child(even) td { background: #FAFBFE; }
+  table.inv-table tr.highlight td { background: var(--light); font-weight: 600; }
+  .inv-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 20px; }
+  .inv-gst-box, .inv-total-box { background: var(--bg); border-radius: var(--radius); padding: 14px 16px; }
+  .inv-gst-row { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .inv-gst-row:last-child { border-bottom: none; font-weight: 600; }
+  .inv-total-row { display: flex; justify-content: space-between; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .inv-total-row:last-child { border-bottom: none; }
+  .inv-grand { background: var(--navy); color: #fff; border-radius: 8px; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+  .inv-grand-label { font-size: 14px; font-weight: 600; }
+  .inv-grand-value { font-size: 20px; font-weight: 700; }
+  .inv-settlement { background: var(--amber-bg); border: 1px solid #E6D080; border-radius: var(--radius); padding: 16px 18px; margin-top: 20px; }
+  .inv-settlement-title { font-size: 12px; font-weight: 700; color: var(--amber); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 10px; }
+  .inv-settlement-row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; border-bottom: 1px solid rgba(184,134,11,0.15); }
+  .inv-settlement-row:last-child { border-bottom: none; font-weight: 600; background: rgba(184,134,11,0.08); margin: 4px -4px -4px; padding: 8px 4px 4px; }
+  .inv-note { font-size: 11px; color: var(--muted); margin-top: 8px; font-style: italic; line-height: 1.6; }
+  .inv-footer-row { display: flex; justify-content: space-between; margin-top: 28px; align-items: flex-end; }
+  .inv-bank { font-size: 12px; line-height: 1.8; }
+  .inv-sign { text-align: right; font-size: 12px; }
+  .inv-sign-line { border-top: 1px solid var(--ink); padding-top: 6px; margin-top: 40px; display: inline-block; min-width: 160px; }
+  .inv-tds-note { font-size: 11px; color: var(--muted); font-style: italic; margin-top: 6px; }
+
+  /* ── Editable fields in preview ── */
+  [contenteditable] { outline: none; border-bottom: 1px dashed transparent; transition: border .2s; cursor: text; }
+  [contenteditable]:hover, [contenteditable]:focus { border-bottom-color: var(--blue); background: rgba(46,80,144,0.04); border-radius: 2px; }
+
+  /* ── History tab ── */
+  .history-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .history-header h2 { font-size: 18px; font-weight: 700; color: var(--navy); }
+  .db-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .db-dot { width: 8px; height: 8px; border-radius: 50%; background: #ccc; }
+  .db-dot.connected { background: #27AE60; }
+  .db-dot.error { background: var(--red); }
+  .invoice-list { display: flex; flex-direction: column; gap: 10px; }
+  .invoice-card { background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: var(--shadow); transition: box-shadow .2s; }
+  .invoice-card:hover { box-shadow: 0 4px 20px rgba(31,56,100,0.13); }
+  .invoice-card-left h3 { font-size: 14px; font-weight: 600; color: var(--navy); }
+  .invoice-card-left p { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .invoice-card-right { display: flex; gap: 8px; align-items: center; }
+  .invoice-card-amount { font-size: 16px; font-weight: 700; color: var(--navy); margin-right: 8px; }
+  .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--white); cursor: pointer; font-weight: 500; transition: all .2s; }
+  .btn-sm:hover { background: var(--light); border-color: var(--blue); color: var(--navy); }
+  .btn-sm.del { color: var(--red); border-color: #F1948A; }
+  .btn-sm.del:hover { background: #FDEDEC; }
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty-state svg { opacity: .3; margin-bottom: 12px; }
+  .empty-state p { font-size: 14px; }
+  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--navy); color: #fff; padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 500; box-shadow: 0 4px 20px rgba(0,0,0,0.2); opacity: 0; transform: translateY(10px); transition: all .3s; z-index: 999; max-width: 320px; }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.error { background: var(--red); }
+  .toast.success { background: var(--green); }
+  .loading { text-align: center; padding: 40px; color: var(--muted); font-size: 13px; }
+  .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--navy); border-radius: 50%; animation: spin .7s linear infinite; margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .setup-banner { background: var(--amber-bg); border: 1px solid #E6D080; border-radius: var(--radius); padding: 14px 18px; margin-bottom: 20px; font-size: 13px; color: var(--amber); display: none; }
+  .setup-banner.show { display: block; }
+  .setup-banner a { color: var(--amber); font-weight: 600; }
+
+  @media print {
+    .app { display: block; }
+    .sidebar, .tabs, .action-bar { display: none !important; }
+    .invoice-shell { box-shadow: none; padding: 0; }
+    [contenteditable] { border-bottom: none !important; }
+  }
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar { padding: 20px 16px; }
+    .main { padding: 20px 16px; }
+    .inv-header { flex-direction: column; gap: 16px; }
+    .inv-parties { grid-template-columns: 1fr; }
+    .inv-bottom { grid-template-columns: 1fr; }
+    .inv-footer-row { flex-direction: column; gap: 20px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ══ SIDEBAR ══ -->
+  <aside class="sidebar">
+    <div>
+      <div class="sidebar-logo">GLS × RL<span>Invoice Generator</span></div>
+    </div>
+
+    <hr class="divider-line">
+
+    <!-- Net Sales Input -->
+    <div>
+      <div class="big-input-wrap">
+        <div class="big-input-label">Gross Collections (₹)</div>
+        <input class="big-input" type="number" id="grossInput" placeholder="0" value="100000" oninput="recalculate()">
+        <div class="calc-preview" id="calcPreview"></div>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Invoice Details</div>
+      <div class="field"><label>Invoice Number</label><input type="text" id="invNo" value="GLS/RL/2025-26/001"></div>
+      <div class="field"><label>Invoice Date</label><input type="date" id="invDate"></div>
+      <div class="field">
+        <label>Period</label>
+        <select id="periodType" onchange="updatePeriod()">
+          <option value="F1">Fortnight 1 (1st–15th)</option>
+          <option value="F2">Fortnight 2 (16th–end)</option>
+        </select>
+      </div>
+      <div class="field"><label>Period Month & Year</label><input type="month" id="periodMonth"></div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Commission Rate</div>
+      <div class="field"><label>Commission % (of Net Sales)</label><input type="number" id="commPct" value="30" min="1" max="100" oninput="recalculate()"></div>
+      <div class="field"><label>GST on Goods (%)</label><input type="number" id="goodsGst" value="18" min="0" max="28" oninput="recalculate()"></div>
+    </div>
+
+    <hr class="divider-line">
+
+    <!-- Supabase Config -->
+    <div class="sidebar-section">
+      <div class="sidebar-label">Database (Supabase)</div>
+      <span class="config-toggle" onclick="toggleConfig()">⚙ Configure Supabase connection</span>
+      <div class="config-panel" id="configPanel">
+        <div class="field"><label>Supabase Project URL</label><input type="text" id="sbUrl" placeholder="https://xxxx.supabase.co"></div>
+        <div class="field"><label>Supabase Anon Key</label><input type="text" id="sbKey" placeholder="eyJh..."></div>
+        <button class="btn btn-secondary" onclick="saveConfig()">Save & Test Connection</button>
+        <p class="config-note">Get these from your Supabase project → Settings → API. These are stored in your browser only.</p>
+      </div>
+    </div>
+
+    <hr class="divider-line">
+
+    <div style="display:flex; flex-direction:column; gap:8px; margin-top:auto;">
+      <button class="btn btn-primary" onclick="saveInvoice()">💾 Save Invoice</button>
+      <button class="btn btn-secondary" onclick="printInvoice()">🖨 Print / Save PDF</button>
+    </div>
+  </aside>
+
+  <!-- ══ MAIN ══ -->
+  <main class="main">
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('preview', this)">Invoice Preview</button>
+      <button class="tab" onclick="switchTab('history', this)">Past Invoices</button>
+      <button class="tab" onclick="switchTab('setup', this)">Setup Guide</button>
+    </div>
+
+    <!-- Invoice Preview -->
+    <div id="tab-preview">
+      <div class="setup-banner" id="setupBanner">
+        ⚠ Supabase is not configured. Invoices will not be saved to the database. <a href="#" onclick="switchTab('setup', document.querySelectorAll('.tab')[2]); return false;">See Setup Guide →</a>
+      </div>
+      <div class="invoice-shell" id="invoicePreview">
+
+        <!-- Header -->
+        <div class="inv-header">
+          <div>
+            <div class="inv-from-name" contenteditable="true" id="glsName">GLS RETAIL AND FASHION</div>
+            <div class="inv-from-role">Authorised Payment Collection Agent</div>
+            <div class="inv-from-detail">
+              GSTIN: <span contenteditable="true" id="glsGstin">33AHMPG2760J1ZC</span><br>
+              Address: <span contenteditable="true" id="glsAddress">[Showroom Address, Ratnagiri, Maharashtra]</span><br>
+              State: Maharashtra &nbsp;|&nbsp; State Code: 27<br>
+              PAN: <span contenteditable="true" id="glsPan">[PAN of GLS Retail]</span>
+            </div>
+          </div>
+          <div class="inv-badge">
+            <div class="inv-badge-title">TAX INVOICE</div>
+            <div class="inv-badge-sub">Commission / Agency Services</div>
+            <div class="inv-meta">
+              <div class="inv-meta-row"><span class="inv-meta-label">Invoice No.</span><span id="dispInvNo">—</span></div>
+              <div class="inv-meta-row"><span class="inv-meta-label">Date</span><span id="dispDate">—</span></div>
+              <div class="inv-meta-row"><span class="inv-meta-label">Period</span><span id="dispPeriod">—</span></div>
+              <div class="inv-meta-row"><span class="inv-meta-label">Due Date</span><span id="dispDue">—</span></div>
+            </div>
+          </div>
+        </div>
+
+        <hr class="inv-divider">
+
+        <!-- Parties -->
+        <div class="inv-parties">
+          <div class="inv-party-box">
+            <div class="inv-party-label">Billed To (Principal)</div>
+            <div class="inv-party-name" contenteditable="true" id="rlName">Rathna Leathers Private Limited</div>
+            <div class="inv-party-detail">
+              GSTIN: <span contenteditable="true" id="rlGstin">33AAACR2281F1ZR</span><br>
+              State: Tamil Nadu &nbsp;|&nbsp; State Code: 33<br>
+              <span contenteditable="true" id="rlAddress">[Registered Office Address, Ranipet, Tamil Nadu]</span>
+            </div>
+          </div>
+          <div class="inv-party-box">
+            <div class="inv-party-label">Place of Supply</div>
+            <div class="inv-party-detail">
+              <span contenteditable="true" id="supplyAddr">[Showroom Address], Ratnagiri, Maharashtra</span><br>
+              State: Maharashtra &nbsp;|&nbsp; State Code: 27<br><br>
+              <strong>Nature:</strong> Intra-state supply of services<br>
+              CGST + SGST applicable &nbsp;|&nbsp; IGST not applicable
+            </div>
+          </div>
+        </div>
+
+        <!-- Account of Sales -->
+        <div class="inv-section-label">Account of Sales — Basis for Commission Computation</div>
+        <table class="inv-table">
+          <thead>
+            <tr><th>Particulars</th><th>Workings</th><th>Amount (₹)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Gross Collections from Customers (incl. GST)</td><td id="w1">—</td><td id="v1">—</td></tr>
+            <tr><td>Less: GST Component in Collections</td><td id="w2">—</td><td id="v2">—</td></tr>
+            <tr class="highlight"><td><strong>Net Sales (Taxable Value, excl. GST) — Commission Base</strong></td><td id="w3">—</td><td id="v3">—</td></tr>
+            <tr><td>Commission @ <span id="commPctDisp">30</span>% of Net Sales</td><td id="w4">—</td><td id="v4">—</td></tr>
+          </tbody>
+        </table>
+
+        <!-- Invoice Line Items -->
+        <div class="inv-section-label">Invoice Details</div>
+        <table class="inv-table">
+          <thead>
+            <tr><th>#</th><th>Description of Service</th><th>SAC Code</th><th>Rate</th><th>Taxable Value</th><th>CGST</th><th>SGST</th><th>Total</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>
+                <strong>Payment Collection &amp; Agency Services</strong><br>
+                <span style="font-size:11px;color:#666" id="lineDesc">Commission for collecting customer payments on behalf of Rathna Leathers Pvt. Ltd. at the Ratnagiri showroom</span>
+              </td>
+              <td style="text-align:center">996211</td>
+              <td style="text-align:center"><span id="rateDisp">30</span>% of Net Sales</td>
+              <td id="li_comm">—</td>
+              <td id="li_cgst">—</td>
+              <td id="li_sgst">—</td>
+              <td id="li_total">—</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- GST Breakup + Totals -->
+        <div class="inv-bottom">
+          <div class="inv-gst-box">
+            <div class="inv-section-label">GST Breakup</div>
+            <div class="inv-gst-row"><span>CGST @ 9%</span><span id="g_cgst">—</span></div>
+            <div class="inv-gst-row"><span>SGST @ 9%</span><span id="g_sgst">—</span></div>
+            <div class="inv-gst-row"><span>Total GST @ 18%</span><span id="g_total">—</span></div>
+            <p class="inv-tds-note" style="margin-top:10px">Note: TDS u/s 194H is not applicable as RL's annual turnover is below ₹1 crore.</p>
+          </div>
+          <div>
+            <div class="inv-total-box">
+              <div class="inv-section-label">Invoice Summary</div>
+              <div class="inv-total-row"><span>Taxable Commission Value</span><span id="s_comm">—</span></div>
+              <div class="inv-total-row"><span>Add: CGST @ 9%</span><span id="s_cgst">—</span></div>
+              <div class="inv-total-row"><span>Add: SGST @ 9%</span><span id="s_sgst">—</span></div>
+            </div>
+            <div class="inv-grand">
+              <span class="inv-grand-label">Total Invoice Amount</span>
+              <span class="inv-grand-value" id="s_total">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Settlement Note -->
+        <div class="inv-settlement">
+          <div class="inv-settlement-title">Settlement Note — How This Invoice is Settled</div>
+          <p style="font-size:12px;color:#7B5800;margin-bottom:10px">This invoice is not settled by a separate bank transfer. Commission is retained by GLS from gross collections; the balance is remitted to RL.</p>
+          <div class="inv-settlement-row"><span>Gross Collections held by GLS</span><span id="st_gross">—</span></div>
+          <div class="inv-settlement-row"><span>Less: Commission retained by GLS</span><span id="st_comm">—</span></div>
+          <div class="inv-settlement-row"><span>Less: GST on Commission (paid by GLS via GSTR-3B)</span><span id="st_gst">—</span></div>
+          <div class="inv-settlement-row"><span><strong>Net Cash Remitted by GLS to RL's Bank Account</strong></span><span id="st_net"><strong>—</strong></span></div>
+          <p class="inv-note" id="itcNote">RL to claim ITC on this invoice in their GSTR-3B for the relevant period.</p>
+        </div>
+
+        <!-- Footer -->
+        <div class="inv-footer-row">
+          <div class="inv-bank">
+            <strong>GLS Bank Account Details</strong><br>
+            Bank: <span contenteditable="true" id="bankName">[Bank Name]</span><br>
+            Account: GLS Retail and Fashion<br>
+            A/c No: <span contenteditable="true" id="bankAc">[Account Number]</span><br>
+            IFSC: <span contenteditable="true" id="bankIfsc">[IFSC Code]</span><br>
+            UPI: <span contenteditable="true" id="bankUpi">[UPI ID]</span>
+          </div>
+          <div class="inv-sign">
+            <p style="font-size:11px;color:#666;margin-bottom:6px">We declare that this invoice shows the actual commission earned for payment collection and agency services rendered on behalf of Rathna Leathers Pvt. Ltd. during the period stated above.</p>
+            <div class="inv-sign-line">
+              <strong>For GLS Retail and Fashion</strong><br>
+              <span style="color:#666">Authorised Signatory</span>
+            </div>
+          </div>
+        </div>
+
+        <p style="font-size:10px;color:#aaa;text-align:center;margin-top:24px">SAC 996211 — Services provided for a fee/commission on retail trade &nbsp;|&nbsp; GST @ 18% (CGST 9% + SGST 9%)</p>
+      </div>
+    </div>
+
+    <!-- Past Invoices -->
+    <div id="tab-history" style="display:none">
+      <div class="history-header">
+        <h2>Past Invoices</h2>
+        <div class="db-status"><div class="db-dot" id="dbDot"></div><span id="dbStatusText">Not connected</span></div>
+      </div>
+      <div id="historyContent"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+    </div>
+
+    <!-- Setup Guide -->
+    <div id="tab-setup" style="display:none">
+      <div class="invoice-shell" style="max-width:720px">
+        <h2 style="color:var(--navy);margin-bottom:20px">Setup Guide — Hosting on GitHub + Supabase</h2>
+
+        <h3 style="color:var(--blue);margin:20px 0 10px">Step 1 — Create a Supabase Project (Free)</h3>
+        <ol style="line-height:2;padding-left:20px;font-size:13px">
+          <li>Go to <strong>supabase.com</strong> and sign up for a free account</li>
+          <li>Click <strong>New Project</strong>, give it a name (e.g. "gls-invoices"), choose <strong>Singapore</strong> region</li>
+          <li>Set a database password and wait for it to provision (~2 minutes)</li>
+        </ol>
+
+        <h3 style="color:var(--blue);margin:20px 0 10px">Step 2 — Create the Invoices Table</h3>
+        <p style="font-size:13px;margin-bottom:10px">In your Supabase project, go to <strong>SQL Editor</strong> and run this query:</p>
+        <pre style="background:#1A1A2E;color:#A8D8A8;padding:16px;border-radius:8px;font-size:12px;overflow-x:auto;line-height:1.6">CREATE TABLE invoices (
+  id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at  timestamptz DEFAULT now(),
+  inv_no      text NOT NULL,
+  inv_date    date NOT NULL,
+  period      text,
+  gross       numeric(12,2),
+  net_sales   numeric(12,2),
+  commission  numeric(12,2),
+  cgst        numeric(12,2),
+  sgst        numeric(12,2),
+  total       numeric(12,2),
+  net_remit   numeric(12,2),
+  metadata    jsonb
+);
+
+-- Allow public read/write (for anon key access)
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON invoices FOR ALL USING (true) WITH CHECK (true);</pre>
+
+        <h3 style="color:var(--blue);margin:20px 0 10px">Step 3 — Get Your API Keys</h3>
+        <ol style="line-height:2;padding-left:20px;font-size:13px">
+          <li>In Supabase, go to <strong>Settings → API</strong></li>
+          <li>Copy the <strong>Project URL</strong> (looks like https://xxxx.supabase.co)</li>
+          <li>Copy the <strong>anon public key</strong> (the long JWT string)</li>
+          <li>Paste both in the sidebar under <strong>Database (Supabase)</strong> and click Save & Test Connection</li>
+        </ol>
+
+        <h3 style="color:var(--blue);margin:20px 0 10px">Step 4 — Host on GitHub Pages (Free)</h3>
+        <ol style="line-height:2;padding-left:20px;font-size:13px">
+          <li>Create a free account at <strong>github.com</strong></li>
+          <li>Create a new repository — name it anything (e.g. "gls-invoice-generator")</li>
+          <li>Upload this <code>index.html</code> file to the repository</li>
+          <li>Go to <strong>Settings → Pages</strong> in the repository</li>
+          <li>Under Source, select <strong>Deploy from a branch → main → / (root)</strong></li>
+          <li>Click Save. Your app will be live at <strong>https://yourusername.github.io/gls-invoice-generator</strong> in ~2 minutes</li>
+        </ol>
+
+        <h3 style="color:var(--blue);margin:20px 0 10px">Step 5 — First Use</h3>
+        <ol style="line-height:2;padding-left:20px;font-size:13px">
+          <li>Open the app in your browser</li>
+          <li>Click <strong>⚙ Configure Supabase connection</strong> in the sidebar and enter your URL and key</li>
+          <li>Enter gross collections, adjust the invoice details, and click <strong>Save Invoice</strong></li>
+          <li>View all past invoices under the <strong>Past Invoices</strong> tab</li>
+        </ol>
+
+        <div style="background:var(--light);border-radius:8px;padding:16px;margin-top:20px;font-size:13px">
+          <strong style="color:var(--navy)">Security note:</strong> Your Supabase keys are stored in your browser's localStorage — they never leave your device. The anon key is designed for browser use and is safe to use this way. For production use, consider adding authentication to your Supabase project.
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ──
+let sbUrl = '', sbKey = '';
+
+// ── Init ──
+window.addEventListener('DOMContentLoaded', () => {
+  const today = new Date();
+  document.getElementById('invDate').value = today.toISOString().split('T')[0];
+  const ym = today.toISOString().slice(0,7);
+  document.getElementById('periodMonth').value = ym;
+
+  sbUrl = localStorage.getItem('sb_url') || '';
+  sbKey = localStorage.getItem('sb_key') || '';
+  if (sbUrl && sbKey) {
+    document.getElementById('sbUrl').value = sbUrl;
+    document.getElementById('sbKey').value = sbKey;
+  }
+
+  loadConfig();
+  recalculate();
+  updatePeriod();
+  updateDbStatus();
+});
+
+function loadConfig() {
+  sbUrl = localStorage.getItem('sb_url') || '';
+  sbKey = localStorage.getItem('sb_key') || '';
+  if (!sbUrl || !sbKey) {
+    document.getElementById('setupBanner').classList.add('show');
+  }
+}
+
+function saveConfig() {
+  sbUrl = document.getElementById('sbUrl').value.trim();
+  sbKey = document.getElementById('sbKey').value.trim();
+  if (!sbUrl || !sbKey) { showToast('Please enter both URL and key', 'error'); return; }
+  localStorage.setItem('sb_url', sbUrl);
+  localStorage.setItem('sb_key', sbKey);
+  document.getElementById('setupBanner').classList.remove('show');
+  testConnection();
+}
+
+async function testConnection() {
+  try {
+    const r = await sbFetch('invoices?limit=1');
+    if (r.ok) {
+      showToast('Connected to Supabase ✓', 'success');
+      updateDbStatus(true);
+    } else {
+      const e = await r.json();
+      showToast('Connection failed: ' + (e.message || e.hint || 'Check your URL and key'), 'error');
+      updateDbStatus(false);
+    }
+  } catch(e) {
+    showToast('Connection error: ' + e.message, 'error');
+    updateDbStatus(false);
+  }
+}
+
+function updateDbStatus(connected = null) {
+  const dot = document.getElementById('dbDot');
+  const txt = document.getElementById('dbStatusText');
+  if (connected === true) { dot.className = 'db-dot connected'; txt.textContent = 'Connected to Supabase'; }
+  else if (connected === false) { dot.className = 'db-dot error'; txt.textContent = 'Connection failed'; }
+  else if (sbUrl && sbKey) { dot.className = 'db-dot'; txt.textContent = 'Configured (not tested)'; }
+  else { dot.className = 'db-dot'; txt.textContent = 'Not configured'; }
+}
+
+function toggleConfig() {
+  document.getElementById('configPanel').classList.toggle('open');
+}
+
+// ── Calculations ──
+function inr(n) {
+  return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function neg(n) { return '(' + inr(n) + ')'; }
+
+function recalculate() {
+  const gross    = parseFloat(document.getElementById('grossInput').value) || 0;
+  const gstRate  = parseFloat(document.getElementById('goodsGst').value) || 18;
+  const commRate = parseFloat(document.getElementById('commPct').value) || 30;
+
+  const netSales   = gross / (1 + gstRate / 100);
+  const gstInSales = gross - netSales;
+  const comm       = netSales * commRate / 100;
+  const cgst       = comm * 0.09;
+  const sgst       = comm * 0.09;
+  const commGst    = cgst + sgst;
+  const invTotal   = comm + commGst;
+  const netRemit   = gross - comm - commGst;
+
+  // Sidebar preview
+  document.getElementById('calcPreview').innerHTML = `
+    <div class="calc-row"><span>Net Sales (excl. GST)</span><span>${inr(netSales)}</span></div>
+    <div class="calc-row"><span>Commission (${commRate}%)</span><span>${inr(comm)}</span></div>
+    <div class="calc-row"><span>GST on Commission</span><span>${inr(commGst)}</span></div>
+    <div class="calc-row total"><span>Invoice Total</span><span>${inr(invTotal)}</span></div>
+    <div class="calc-row" style="margin-top:6px"><span>Net Remit to RL</span><span>${inr(netRemit)}</span></div>
+  `;
+
+  // Commission % display
+  document.querySelectorAll('#commPctDisp, #rateDisp').forEach(el => el.textContent = commRate);
+
+  // Account of Sales
+  set('w1', 'Customer payments received'); set('v1', inr(gross));
+  set('w2', `${inr(gross)} × ${gstRate}/118`); set('v2', neg(gstInSales));
+  set('w3', `${inr(gross)} ÷ ${1 + gstRate/100}`); set('v3', inr(netSales));
+  set('w4', `${inr(netSales)} × ${commRate}%`); set('v4', inr(comm));
+
+  // Line items
+  set('li_comm', inr(comm)); set('li_cgst', inr(cgst)); set('li_sgst', inr(sgst)); set('li_total', inr(invTotal));
+
+  // GST breakup
+  set('g_cgst', inr(cgst)); set('g_sgst', inr(sgst)); set('g_total', inr(commGst));
+
+  // Summary
+  set('s_comm', inr(comm)); set('s_cgst', inr(cgst)); set('s_sgst', inr(sgst)); set('s_total', inr(invTotal));
+
+  // Settlement
+  set('st_gross', inr(gross)); set('st_comm', neg(comm)); set('st_gst', neg(commGst));
+  document.getElementById('st_net').innerHTML = `<strong>${inr(netRemit)}</strong>`;
+
+  // ITC note
+  document.getElementById('itcNote').textContent =
+    `RL to claim ITC of ${inr(commGst)} (CGST ${inr(cgst)} + SGST ${inr(sgst)}) on this invoice in their GSTR-3B.`;
+}
+
+function set(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+// ── Period / Due Date ──
+function updatePeriod() {
+  const type  = document.getElementById('periodType').value;
+  const month = document.getElementById('periodMonth').value;
+  if (!month) return;
+
+  const [yr, mo] = month.split('-').map(Number);
+  const monthName = new Date(yr, mo - 1, 1).toLocaleString('en-IN', { month: 'short' });
+  const lastDay = new Date(yr, mo, 0).getDate();
+
+  let periodStr, dueStr;
+  if (type === 'F1') {
+    periodStr = `01-${monthName}-${yr} to 15-${monthName}-${yr}`;
+    dueStr    = `20-${monthName}-${yr}`;
+  } else {
+    periodStr = `16-${monthName}-${yr} to ${lastDay}-${monthName}-${yr}`;
+    const dueMonth = new Date(yr, mo, 1); // 1st of next month = next month
+    const nextMonthName = dueMonth.toLocaleString('en-IN', { month: 'short' });
+    const nextYr = dueMonth.getFullYear();
+    dueStr = `07-${nextMonthName}-${nextYr}`;
+  }
+
+  set('dispPeriod', periodStr);
+  set('dispDue', dueStr);
+  document.getElementById('lineDesc').textContent =
+    `Commission for collecting customer payments on behalf of Rathna Leathers Pvt. Ltd. at the Ratnagiri showroom for the period ${periodStr}`;
+}
+
+document.addEventListener('input', e => {
+  if (e.target.id === 'invNo')    set('dispInvNo', e.target.value);
+  if (e.target.id === 'invDate')  set('dispDate', formatDate(e.target.value));
+  if (e.target.id === 'periodMonth' || e.target.id === 'periodType') updatePeriod();
+});
+
+document.getElementById('invNo').addEventListener('input', e => set('dispInvNo', e.target.value));
+document.getElementById('invDate').addEventListener('change', e => set('dispDate', formatDate(e.target.value)));
+document.getElementById('periodMonth').addEventListener('change', updatePeriod);
+document.getElementById('periodType').addEventListener('change', updatePeriod);
+
+function formatDate(d) {
+  if (!d) return '—';
+  const [y, m, day] = d.split('-');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${day}-${months[parseInt(m)-1]}-${y}`;
+}
+
+// ── Tabs ──
+function switchTab(name, btn) {
+  ['preview','history','setup'].forEach(t => {
+    document.getElementById('tab-' + t).style.display = t === name ? 'block' : 'none';
+  });
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (name === 'history') loadHistory();
+}
+
+// ── Save Invoice ──
+async function saveInvoice() {
+  if (!sbUrl || !sbKey) {
+    showToast('Configure Supabase first (see Setup Guide)', 'error'); return;
+  }
+
+  const gross    = parseFloat(document.getElementById('grossInput').value) || 0;
+  const gstRate  = parseFloat(document.getElementById('goodsGst').value) || 18;
+  const commRate = parseFloat(document.getElementById('commPct').value) || 30;
+  const netSales = gross / (1 + gstRate / 100);
+  const comm     = netSales * commRate / 100;
+  const cgst     = comm * 0.09;
+  const sgst     = comm * 0.09;
+  const total    = comm + cgst + sgst;
+  const netRemit = gross - comm - cgst - sgst;
+
+  const payload = {
+    inv_no:     document.getElementById('invNo').value,
+    inv_date:   document.getElementById('invDate').value,
+    period:     document.getElementById('dispPeriod').textContent,
+    gross:      +gross.toFixed(2),
+    net_sales:  +netSales.toFixed(2),
+    commission: +comm.toFixed(2),
+    cgst:       +cgst.toFixed(2),
+    sgst:       +sgst.toFixed(2),
+    total:      +total.toFixed(2),
+    net_remit:  +netRemit.toFixed(2),
+    metadata: {
+      gls_gstin:   document.getElementById('glsGstin').textContent,
+      rl_gstin:    document.getElementById('rlGstin').textContent,
+      comm_pct:    commRate,
+      goods_gst:   gstRate,
+    }
+  };
+
+  try {
+    const r = await sbFetch('invoices', { method: 'POST', body: JSON.stringify(payload) });
+    if (r.status === 201 || r.ok) {
+      showToast('Invoice saved to Supabase ✓', 'success');
+    } else {
+      const e = await r.json();
+      showToast('Save failed: ' + (e.message || e.hint || JSON.stringify(e)), 'error');
+    }
+  } catch(e) {
+    showToast('Save error: ' + e.message, 'error');
+  }
+}
+
+// ── Load History ──
+async function loadHistory() {
+  const el = document.getElementById('historyContent');
+  if (!sbUrl || !sbKey) {
+    el.innerHTML = `<div class="empty-state"><p>Configure Supabase to view past invoices.<br><a href="#" onclick="switchTab('setup', document.querySelectorAll('.tab')[2]);return false">See Setup Guide →</a></p></div>`;
+    return;
+  }
+  el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading invoices...</div>';
+  try {
+    const r = await sbFetch('invoices?order=created_at.desc&limit=50');
+    if (!r.ok) throw new Error('Failed to fetch');
+    const data = await r.json();
+    updateDbStatus(true);
+
+    if (!data.length) {
+      el.innerHTML = `<div class="empty-state"><p>No invoices saved yet.<br>Create your first invoice and click Save.</p></div>`;
+      return;
+    }
+
+    el.innerHTML = `<div class="invoice-list">${data.map(inv => `
+      <div class="invoice-card">
+        <div class="invoice-card-left">
+          <h3>${inv.inv_no}</h3>
+          <p>${inv.period || '—'} &nbsp;·&nbsp; Date: ${inv.inv_date} &nbsp;·&nbsp; Commission: ${inr(inv.commission)}</p>
+        </div>
+        <div class="invoice-card-right">
+          <span class="invoice-card-amount">${inr(inv.total)}</span>
+          <button class="btn-sm" onclick="loadInvoice(${JSON.stringify(inv).replace(/"/g, '&quot;')})">Load</button>
+          <button class="btn-sm del" onclick="deleteInvoice('${inv.id}')">Delete</button>
+        </div>
+      </div>`).join('')}
+    </div>`;
+  } catch(e) {
+    updateDbStatus(false);
+    el.innerHTML = `<div class="empty-state"><p>Could not load invoices. Check your Supabase configuration.</p></div>`;
+  }
+}
+
+function loadInvoice(inv) {
+  document.getElementById('grossInput').value = inv.gross;
+  document.getElementById('invNo').value = inv.inv_no;
+  document.getElementById('invDate').value = inv.inv_date;
+  if (inv.metadata) {
+    if (inv.metadata.comm_pct) document.getElementById('commPct').value = inv.metadata.comm_pct;
+    if (inv.metadata.goods_gst) document.getElementById('goodsGst').value = inv.metadata.goods_gst;
+  }
+  recalculate();
+  set('dispInvNo', inv.inv_no);
+  set('dispDate', formatDate(inv.inv_date));
+  if (inv.period) set('dispPeriod', inv.period);
+  switchTab('preview', document.querySelectorAll('.tab')[0]);
+  showToast('Invoice loaded ✓', 'success');
+}
+
+async function deleteInvoice(id) {
+  if (!confirm('Delete this invoice? This cannot be undone.')) return;
+  try {
+    const r = await sbFetch(`invoices?id=eq.${id}`, { method: 'DELETE' });
+    if (r.ok || r.status === 204) {
+      showToast('Invoice deleted', 'success');
+      loadHistory();
+    } else {
+      showToast('Delete failed', 'error');
+    }
+  } catch(e) {
+    showToast('Delete error: ' + e.message, 'error');
+  }
+}
+
+// ── Supabase fetch helper ──
+function sbFetch(path, opts = {}) {
+  return fetch(`${sbUrl}/rest/v1/${path}`, {
+    ...opts,
+    headers: {
+      'apikey': sbKey,
+      'Authorization': `Bearer ${sbKey}`,
+      'Content-Type': 'application/json',
+      'Prefer': opts.method === 'POST' ? 'return=minimal' : '',
+      ...(opts.headers || {})
+    }
+  });
+}
+
+// ── Print ──
+function printInvoice() {
+  window.print();
+}
+
+// ── Toast ──
+let toastTimer;
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (type ? ' ' + type : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ── Initial display values ──
+set('dispInvNo', document.getElementById('invNo').value);
+set('dispDate', formatDate(document.getElementById('invDate').value));
+</script>
+</body>
+</html>
